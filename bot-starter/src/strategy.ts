@@ -73,10 +73,6 @@ function wordsContaining(dictionary: string[], letter: string): WordInfo[] {
   return words;
 }
 
-function potential(score: number, missing: number): number {
-  return score / (1 + missing) ** 1.5;
-}
-
 export function decideBid(ctx: BidContext): number {
   const balance = Math.max(0, Math.floor(ctx.myBalance));
   if (balance === 0) return 0;
@@ -92,7 +88,7 @@ export function decideBid(ctx: BidContext): number {
   }
   const usedCounts = new Uint8Array(26);
   const touchedIndices = new Uint8Array(26);
-  let bestMarginalValue = 0;
+  let bestLetterValue = 0;
 
   for (const { word, score, letterCount } of words) {
     let missingBefore = 0;
@@ -111,14 +107,12 @@ export function decideBid(ctx: BidContext): number {
       continue;
     }
 
-    const missingAfter = missingBefore - 1;
-    const marginalValue =
-      potential(score, missingAfter) - potential(score, missingBefore);
-    bestMarginalValue = Math.max(bestMarginalValue, marginalValue);
+    const valuePerMissingLetter = score / missingBefore;
+    bestLetterValue = Math.max(bestLetterValue, valuePerMissingLetter);
   }
 
   const willingnessToPay = Math.floor(
-    bestMarginalValue *
+    bestLetterValue *
       (ctx.isVickrey ? 1 : FIRST_PRICE_VALUE_FRACTION),
   );
   const balanceBidFraction = ctx.isVickrey
@@ -144,7 +138,7 @@ export function decideBid(ctx: BidContext): number {
     rivalObservedPayment = Math.max(rivalObservedPayment, median);
   }
   const defenseCap = Math.min(
-    Math.floor(bestMarginalValue * DEFENSE_VALUE_FRACTION),
+    Math.floor(bestLetterValue * DEFENSE_VALUE_FRACTION),
     balanceLimit,
   );
   const defensiveBid = Math.min(

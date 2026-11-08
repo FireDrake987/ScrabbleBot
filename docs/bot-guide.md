@@ -151,6 +151,11 @@ lifecycle). Edit `src/strategy.ts` — it has two functions you'll want to tune:
 - `chooseWord(ctx)` — picks a word to play from your tiles, given the shared
   dictionary.
 
+The default Vickrey strategy spreads a candidate word's reward over the
+letters still missing to help build it, so useful early-word letters receive
+nonzero bids. Bids are still limited by current balance and estimated tile
+value; first-price bids remain shaded.
+
 ```sh
 git clone https://github.com/clockworklabs/scrabblebot
 cd scrabblebot/bot-starter

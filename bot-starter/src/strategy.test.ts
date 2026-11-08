@@ -18,7 +18,7 @@ test("chooseWord picks the longest word the rack can spell", () => {
   assert.equal(chooseWord({ myRack: rack("CX"), dictionary }), null);
 });
 
-test("decideBid values letters that advance playable dictionary words", () => {
+test("decideBid values letters toward words even when several letters are missing", () => {
   const myRack = rack("AT");
   const dictionary = ["CAT", "AT", "DOG"];
 
@@ -32,6 +32,16 @@ test("decideBid values letters that advance playable dictionary words", () => {
   assert.ok(decideBid({ ...context, letter: "C", myBalance: 100 }) > 0);
   assert.equal(decideBid({ ...context, letter: "Z", myBalance: 100 }), 0);
   assert.equal(decideBid({ ...context, letter: "C", myBalance: 1 }), 1);
+  assert.equal(
+    decideBid({
+      ...context,
+      letter: "Q",
+      myRack: rack(""),
+      dictionary: ["QUIZZES"],
+      myBalance: 100,
+    }),
+    14,
+  );
 });
 
 test("Vickrey bids approach tile value and respect the larger balance cap", () => {
@@ -53,7 +63,7 @@ test("Vickrey bids approach tile value and respect the larger balance cap", () =
     opponents: [{ score: 9, winningPayments: [50] }],
   });
 
-  assert.equal(normalBid, 21);
+  assert.equal(normalBid, 33);
   assert.equal(trailingOpponentBid, normalBid);
   assert.equal(competitiveOpponentBid, normalBid);
   assert.equal(
@@ -69,7 +79,7 @@ test("Vickrey bids approach tile value and respect the larger balance cap", () =
     isVickrey: false,
     opponents: [{ score: 10, winningPayments: [12] }],
   });
-  assert.equal(firstPriceBid, 13);
+  assert.equal(firstPriceBid, 21);
   assert.equal(
     decideBid({
       ...context,
