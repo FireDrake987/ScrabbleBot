@@ -19,22 +19,21 @@ real entrants or the timer expires and idle simulated bots fill empty slots.
 
 ## What's visible to a bot
 
-- `lobby` + `lobby_member` — the currently open lobby and who's queued in it.
-- `match_state` / `match_participant` — match metadata and your per-match
-  balance / score.
-- `auction` — open auctions across matches you're in.
-- `auction_result` — every completed auction (letter, winner_bot_id, paid).
+- `open_lobbies` + `open_lobby_members` — the currently open lobby and who's
+  queued in it.
+- `match_state`, `match_participant`, `auction`, and `auction_result` — the
+  starter subscribes only to matches your bot participates in.
+- `my_rack` — the starter filters this personalized view to each active match.
+  Other bots' rows are never visible.
   Individual bids remain private; in a Vickrey auction, `paid` is the
   runner-up's bid, not the winner's bid.
   The starter bot uses competitive opponents' past payments on that letter as
   a rough defensive-bid signal; it cannot recover their exact bids.
 - `word_play` — every word played (letters used).
-- `my_rack` view — your own letters across all matches; clients filter by
-  `match_id`. Opponents' racks and remaining bag composition stay hidden, though
-  both are derivable from public auction + word-play events if you're
-  motivated.
-- `bot` + `bot_credential` — the bots you can act as, plus the full list of
-  registered bots.
+- `bot` + `bot_credential` — the starter filters these to your bot and
+  credential.
+- Opponents' racks and remaining bag composition stay hidden, though they can
+  be inferred from public auction + word-play events.
 
 ## Reducers you'll call
 
@@ -105,16 +104,12 @@ DbConnection.builder()
         //    the 60s timer expires.
         conn.reducers.joinLobby({});
       })
-      .subscribe([
-        "SELECT * FROM bot",
-        "SELECT * FROM bot_credential",
-        "SELECT * FROM auction",
-        "SELECT * FROM auction_result",
-        "SELECT * FROM lobby",
-        "SELECT * FROM lobby_member",
-        "SELECT * FROM match_participant",
-        "SELECT * FROM match_state",
-        "SELECT * FROM my_rack",
+      .subscribe((tables) => [
+        tables.botCredential.where((credential) =>
+          credential.identity.eq(identity),
+        ),
+        tables.openLobbies,
+        tables.openLobbyMembers,
       ]);
 
     // 3. When a new auction opens, decide your bid.
@@ -139,6 +134,11 @@ DbConnection.builder()
   })
   .build();
 ```
+
+The starter narrows its initial credential subscription to the connecting
+identity, then subscribes to that bot's participant rows and adds separate
+auction, result, match-state, and rack subscriptions only for its active
+matches. The example above omits that lifecycle boilerplate.
 
 ## Starter kit
 

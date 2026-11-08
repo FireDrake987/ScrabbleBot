@@ -69,7 +69,13 @@ let myIdentity: Identity | null = null;
 let myBotId: bigint | null = null;
 const bidsByAuction = new Set<string>();
 const lastWordAttemptByMatch = new Map<string, number>();
+const matchStateSubscriptions = new Map<bigint, { unsubscribe(): void }>();
+const matchDataSubscriptions = new Map<bigint, { unsubscribe(): void }>();
+const pendingMatchStateChecks = new Set<bigint>();
+const runningMatchIds = new Set<bigint>();
 const WORD_RETRY_MS = 500;
+let credentialClaimRequested = false;
+let botSubscriptionsStarted = false;
 
 function opponentPaymentHistoryFor(
   conn: DbConnection,
@@ -106,6 +112,127 @@ function resolveMyBotId(conn: DbConnection): bigint | null {
   if (!myIdentity) return null;
   const cred = conn.db.botCredential.identity.find(myIdentity);
   return cred ? cred.botId : null;
+}
+
+function reportSubscriptionError(conn: DbConnection, err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[${BOT_NAME}] subscription failed: ${message}`);
+}
+
+function maybeJoinLobby(conn: DbConnection) {
+  if (pendingMatchStateChecks.size > 0 || runningMatchIds.size > 0) return;
+  joinLobby(conn);
+}
+
+function stopTrackingMatch(matchId: bigint) {
+  pendingMatchStateChecks.delete(matchId);
+  runningMatchIds.delete(matchId);
+  matchStateSubscriptions.get(matchId)?.unsubscribe();
+  matchDataSubscriptions.get(matchId)?.unsubscribe();
+  matchStateSubscriptions.delete(matchId);
+  matchDataSubscriptions.delete(matchId);
+}
+
+function subscribeToMatchData(conn: DbConnection, matchId: bigint) {
+  if (matchDataSubscriptions.has(matchId)) return;
+  const handle = conn
+    .subscriptionBuilder()
+    .onError((ctx) => reportSubscriptionError(conn, ctx.event))
+    .onApplied(() => {
+      for (const auction of conn.db.auction.iter()) {
+        if (auction.matchId === matchId && auction.status.tag === "Open") {
+          tryBid(conn, auction.id, matchId, auction.letter);
+        }
+      }
+      tryPlayWord(conn);
+    })
+    .subscribe((tables) => [
+      tables.auction.where((auction) => auction.matchId.eq(matchId)),
+      tables.auctionResult.where((result) => result.matchId.eq(matchId)),
+      tables.myRack.where((holding) => holding.matchId.eq(matchId)),
+    ]);
+  matchDataSubscriptions.set(matchId, handle);
+}
+
+function trackMatch(conn: DbConnection, matchId: bigint) {
+  if (matchStateSubscriptions.has(matchId)) return;
+  pendingMatchStateChecks.add(matchId);
+  const handle = conn
+    .subscriptionBuilder()
+    .onError((ctx) => {
+      pendingMatchStateChecks.delete(matchId);
+      reportSubscriptionError(conn, ctx.event);
+      maybeJoinLobby(conn);
+    })
+    .onApplied(() => {
+      pendingMatchStateChecks.delete(matchId);
+      const state = conn.db.matchState.id.find(matchId);
+      if (state?.status.tag === "Running") {
+        runningMatchIds.add(matchId);
+        subscribeToMatchData(conn, matchId);
+      } else {
+        stopTrackingMatch(matchId);
+        maybeJoinLobby(conn);
+      }
+    })
+    .subscribe((tables) =>
+      tables.matchState.where((state) => state.id.eq(matchId)),
+    );
+  matchStateSubscriptions.set(matchId, handle);
+}
+
+function startBotSubscriptions(conn: DbConnection, botId: bigint) {
+  if (botSubscriptionsStarted) return;
+  botSubscriptionsStarted = true;
+  conn
+    .subscriptionBuilder()
+    .onError((ctx) => reportSubscriptionError(conn, ctx.event))
+    .onApplied(() => {
+      const bot = conn.db.bot.id.find(botId);
+      console.log(
+        `[${BOT_NAME}] acting as bot '${bot?.name ?? "?"}' (id ${botId})`,
+      );
+      for (const participant of conn.db.matchParticipant.iter()) {
+        if (participant.botId === botId) trackMatch(conn, participant.matchId);
+      }
+      if (TOURNAMENT_ID) {
+        conn.reducers
+          .registerForTournament({ tournamentId: BigInt(TOURNAMENT_ID) })
+          .then(() =>
+            console.log(
+              `[${BOT_NAME}] registered for tournament ${TOURNAMENT_ID}`,
+            ),
+          )
+          .catch(logFailure(`registering for tournament ${TOURNAMENT_ID}`));
+      }
+      maybeJoinLobby(conn);
+    })
+    .subscribe((tables) => [
+      tables.bot.where((bot) => bot.id.eq(botId)),
+      tables.matchParticipant.where((participant) =>
+        participant.botId.eq(botId),
+      ),
+    ]);
+}
+
+function activateBot(conn: DbConnection) {
+  myBotId = resolveMyBotId(conn);
+  if (myBotId !== null) {
+    startBotSubscriptions(conn, myBotId);
+    return;
+  }
+  if (!BOT_NONCE) {
+    console.error(
+      `[${BOT_NAME}] no BotCredential for this token. Set BOT_TOKEN or BOT_NONCE and re-run.`,
+    );
+    return;
+  }
+  if (credentialClaimRequested) return;
+  credentialClaimRequested = true;
+  console.log(`[${BOT_NAME}] claiming credential with nonce…`);
+  conn.reducers
+    .claimCredential({ code: BOT_NONCE })
+    .catch(logFailure("claiming the credential"));
 }
 
 function rackForMatch(
@@ -198,16 +325,8 @@ function tryBid(
 
 function tryPlayWord(conn: DbConnection) {
   if (myBotId === null) return;
-  // Only matches still being played. The bot keeps its letters from
-  // matches that have ended, but can't play them.
-  const matches = new Set<bigint>();
-  for (const p of conn.db.matchParticipant.iter()) {
-    if (p.botId !== myBotId) continue;
-    const m = conn.db.matchState.id.find(p.matchId);
-    if (m?.status.tag === "Running") matches.add(p.matchId);
-  }
   const now = Date.now();
-  for (const matchId of matches) {
+  for (const matchId of runningMatchIds) {
     const key = String(matchId);
     if (now - (lastWordAttemptByMatch.get(key) ?? 0) < WORD_RETRY_MS) continue;
     lastWordAttemptByMatch.set(key, now);
@@ -233,87 +352,28 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   saveToken(token);
   console.log(`[${BOT_NAME}] connected as ${identity.toHexString()}`);
 
-  conn
-    .subscriptionBuilder()
-    .onError((ctx) =>
-      console.error(
-        `[${BOT_NAME}] subscription failed: ${ctx.event?.message ?? "unknown subscription error"}`,
-      ),
-    )
-    .onApplied(() => {
-      console.log(`[${BOT_NAME}] subscription applied`);
-
-      // Resolve our bot id, possibly after claiming a nonce.
-      myBotId = resolveMyBotId(conn);
-      if (myBotId === null) {
-        if (BOT_NONCE) {
-          console.log(`[${BOT_NAME}] claiming credential with nonce…`);
-          conn.reducers
-            .claimCredential({ code: BOT_NONCE })
-            .catch(logFailure("claiming the credential"));
-          // Wait briefly for the credential to land; check again.
-          setTimeout(() => {
-            myBotId = resolveMyBotId(conn);
-            if (myBotId === null) {
-              console.error(
-                `[${BOT_NAME}] couldn't claim credential. Bad / expired nonce?`,
-              );
-              process.exit(1);
-            }
-            const bot = conn.db.bot.id.find(myBotId);
-            console.log(
-              `[${BOT_NAME}] claimed credential for bot '${bot?.name ?? "?"}' (id ${myBotId})`,
-            );
-            bootstrapActivity(conn);
-          }, 1000);
-          return;
-        } else {
-          console.error(
-            `[${BOT_NAME}] no BotCredential for this token. Set BOT_TOKEN or BOT_NONCE and re-run.`,
-          );
-          process.exit(1);
-        }
-      }
-
-      const bot = conn.db.bot.id.find(myBotId);
-      console.log(
-        `[${BOT_NAME}] acting as bot '${bot?.name ?? "?"}' (id ${myBotId})`,
-      );
-      bootstrapActivity(conn);
-    })
-    .subscribe([
-      "SELECT * FROM bot",
-      "SELECT * FROM bot_credential",
-      "SELECT * FROM auction",
-      "SELECT * FROM auction_result",
-      "SELECT * FROM lobby",
-      "SELECT * FROM lobby_member",
-      "SELECT * FROM match_participant",
-      "SELECT * FROM match_state",
-      "SELECT * FROM my_rack",
-    ]);
-
-  conn.db.auction.onInsert((_ctx: EventContext, a) => {
-    if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
+  conn.db.auction.onInsert((_ctx: EventContext, auction) => {
+    if (auction.status.tag === "Open") {
+      tryBid(conn, auction.id, auction.matchId, auction.letter);
+    }
   });
   conn.db.myRack.onInsert(() => tryPlayWord(conn));
   conn.db.myRack.onUpdate(() => tryPlayWord(conn));
-  conn.db.botCredential.onInsert(() => {
-    if (myBotId === null) myBotId = resolveMyBotId(conn);
+  conn.db.botCredential.onInsert(() => activateBot(conn));
+  conn.db.matchParticipant.onInsert((_ctx, participant) => {
+    if (participant.botId === myBotId) trackMatch(conn, participant.matchId);
   });
-  conn.db.auctionResult.onInsert((_ctx, r) => {
+  conn.db.auctionResult.onInsert((_ctx, result) => {
     if (myBotId === null) return;
     const winner =
-      r.winnerBotId !== undefined && r.winnerBotId !== null
-        ? String(r.winnerBotId)
+      result.winnerBotId !== undefined && result.winnerBotId !== null
+        ? String(result.winnerBotId)
         : "no-bid";
     console.log(
-      `[${BOT_NAME}] match ${r.matchId} auction ${r.auctionId} '${r.letter}' → bot ${winner} paid ${r.paid}`,
+      `[${BOT_NAME}] match ${result.matchId} auction ${result.auctionId} '${result.letter}' → bot ${winner} paid ${result.paid}`,
     );
   });
-  // When a match this bot was in ends, hop back into the lobby.
   conn.db.matchState.onUpdate((_ctx, old, neu) => {
-    if (myBotId === null) return;
     if (
       neu.status.tag === "Running" &&
       neu.currentAuctionId !== undefined &&
@@ -322,53 +382,45 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
       const auction = conn.db.auction.id.find(neu.currentAuctionId);
       if (auction) tryBid(conn, auction.id, neu.id, auction.letter);
     }
-    if (old.status.tag !== "Ended" && neu.status.tag === "Ended") {
-      const wasIn = Array.from(conn.db.matchParticipant.iter()).some(
-        (p) => p.matchId === neu.id && p.botId === myBotId,
-      );
-      if (wasIn) {
-        console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
-        joinLobby(conn);
-      }
+    if (
+      old.status.tag !== "Ended" &&
+      neu.status.tag === "Ended" &&
+      runningMatchIds.has(neu.id)
+    ) {
+      console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
+      stopTrackingMatch(neu.id);
+      maybeJoinLobby(conn);
     }
   });
+
+  conn
+    .subscriptionBuilder()
+    .onError((ctx) => reportSubscriptionError(conn, ctx.event))
+    .onApplied(() => {
+      activateBot(conn);
+    })
+    .subscribe((tables) => [
+      tables.botCredential.where((credential) =>
+        credential.identity.eq(identity),
+      ),
+      tables.openLobbies,
+      tables.openLobbyMembers,
+    ]);
 }
 
 function joinLobby(conn: DbConnection) {
   if (myBotId === null) return;
-  const inRunning = Array.from(conn.db.matchParticipant.iter()).some((p) => {
-    if (p.botId !== myBotId) return false;
-    const m = conn.db.matchState.id.find(p.matchId);
-    return m?.status.tag === "Running";
-  });
-  if (inRunning) return;
-  const openLobby = Array.from(conn.db.lobby.iter()).find(
+  const openLobby = Array.from(conn.db.openLobbies.iter()).find(
     (l) => l.status.tag === "Open",
   );
   const alreadyIn =
     openLobby !== undefined &&
-    Array.from(conn.db.lobbyMember.iter()).some(
+    Array.from(conn.db.openLobbyMembers.iter()).some(
       (lm) => lm.lobbyId === openLobby.id && lm.botId === myBotId,
     );
   if (alreadyIn) return;
   console.log(`[${BOT_NAME}] joining lobby`);
   conn.reducers.joinLobby({}).catch(logFailure("joining the lobby"));
-}
-
-function bootstrapActivity(conn: DbConnection) {
-  if (TOURNAMENT_ID) {
-    conn.reducers
-      .registerForTournament({ tournamentId: BigInt(TOURNAMENT_ID) })
-      .then(() =>
-        console.log(`[${BOT_NAME}] registered for tournament ${TOURNAMENT_ID}`),
-      )
-      .catch(logFailure(`registering for tournament ${TOURNAMENT_ID}`));
-  }
-  joinLobby(conn);
-  for (const a of conn.db.auction.iter()) {
-    if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
-  }
-  tryPlayWord(conn);
 }
 
 function main() {
