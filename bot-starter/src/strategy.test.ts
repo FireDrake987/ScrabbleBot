@@ -40,7 +40,17 @@ test("decideBid values letters toward words even when several letters are missin
       dictionary: ["QUIZZES"],
       myBalance: 100,
     }),
-    14,
+    38,
+  );
+  assert.equal(
+    decideBid({
+      ...context,
+      letter: "A",
+      myRack: rack(""),
+      dictionary: ["AA"],
+      myBalance: 100,
+    }),
+    4,
   );
 });
 
@@ -72,7 +82,7 @@ test("Vickrey bids approach tile value and respect the larger balance cap", () =
       myBalance: 10,
       opponents: [{ score: 10, winningPayments: [50] }],
     }),
-    6,
+    8,
   );
   const firstPriceBid = decideBid({
     ...context,

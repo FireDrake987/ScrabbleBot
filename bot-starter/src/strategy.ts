@@ -14,7 +14,8 @@ interface WordInfo {
 
 const indexedWords = new WeakMap<string[], Map<string, WordInfo[]>>();
 const FIRST_PRICE_MAX_BALANCE_BID_FRACTION = 0.35;
-const VICKREY_MAX_BALANCE_BID_FRACTION = 0.6;
+const VICKREY_MAX_BALANCE_BID_FRACTION = 0.8;
+const MIN_USEFUL_VICKREY_BID = 4;
 const FIRST_PRICE_VALUE_FRACTION = 0.65;
 const DEFENSE_OBSERVED_PAYMENT_FRACTION = 0.8;
 const DEFENSE_VALUE_FRACTION = 0.8;
@@ -107,14 +108,17 @@ export function decideBid(ctx: BidContext): number {
       continue;
     }
 
-    const valuePerMissingLetter = score / missingBefore;
-    bestLetterValue = Math.max(bestLetterValue, valuePerMissingLetter);
+    const earlyLetterValue = score / Math.sqrt(missingBefore);
+    bestLetterValue = Math.max(bestLetterValue, earlyLetterValue);
   }
 
-  const willingnessToPay = Math.floor(
-    bestLetterValue *
-      (ctx.isVickrey ? 1 : FIRST_PRICE_VALUE_FRACTION),
+  const rawBid = Math.floor(
+    bestLetterValue * (ctx.isVickrey ? 1 : FIRST_PRICE_VALUE_FRACTION),
   );
+  const willingnessToPay =
+    ctx.isVickrey && bestLetterValue > 0
+      ? Math.max(MIN_USEFUL_VICKREY_BID, rawBid)
+      : rawBid;
   const balanceBidFraction = ctx.isVickrey
     ? VICKREY_MAX_BALANCE_BID_FRACTION
     : FIRST_PRICE_MAX_BALANCE_BID_FRACTION;
