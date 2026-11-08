@@ -10,6 +10,7 @@
     "build": "tsc"
   },
   "dependencies": {
+    "approve": "^0.0.12",
     "spacetimedb": "^2.12.0",
     "ws": "^8.18.0"
   },
@@ -18,5 +19,8 @@
     "@types/ws": "^8.5.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.0": true
   }
 }

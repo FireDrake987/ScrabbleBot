@@ -372,6 +372,10 @@ export function onMatchEnded(ctx: Ctx, matchId: bigint) {
     ctx.db.auctionTopBid.auctionId.delete(top.auctionId);
   }
 
+  for (const bid of ctx.db.auctionBidHistory.bidHistoryByMatch.filter(matchId)) {
+    ctx.db.auctionBidHistory.id.delete(bid.id);
+  }
+
   updateEloAtMatchEnd(ctx, matchId);
 }
 
@@ -554,6 +558,16 @@ export function closeAuction(ctx: Ctx, matchId: bigint): boolean {
 
   const bids = [...ctx.db.pendingBid.bidByAuction.filter(auctionId)];
   const sorted = bids.filter((b) => b.amount > 0n);
+  for (const bid of bids) {
+    ctx.db.auctionBidHistory.insert({
+      id: 0n,
+      auctionId,
+      matchId,
+      bidderBotId: bid.bidderBotId,
+      letter: auction.letter,
+      amount: bid.amount,
+    });
+  }
   // Shuffle, then stable-sort by amount, so equal bids land in random
   // order and ties don't always go to whoever bid first.
   shuffle(ctx, sorted);

@@ -435,6 +435,30 @@ export const pendingBid = table(
 );
 export type PendingBid = Infer<typeof pendingBid.rowType>;
 
+// Public only after an auction closes. Bots can use completed bid history to
+// adapt their strategy without exposing active sealed bids.
+export const auctionBidHistory = table(
+  {
+    public: true,
+    indexes: [
+      {
+        accessor: "bidHistoryByMatch",
+        algorithm: "btree",
+        columns: ["matchId"],
+      },
+    ],
+  },
+  t.row("AuctionBidHistory", {
+    id: t.u64().primaryKey().autoInc(),
+    auctionId: t.u64(),
+    matchId: t.u64(),
+    bidderBotId: t.u64(),
+    letter: t.string(),
+    amount: t.i64(),
+  }),
+);
+export type AuctionBidHistory = Infer<typeof auctionBidHistory.rowType>;
+
 export const auctionResult = table(
   {
     public: true,
@@ -457,13 +481,10 @@ export const auctionResult = table(
 );
 export type AuctionResult = Infer<typeof auctionResult.rowType>;
 
-// Private — live, in-progress matches. Top bid is sensitive while a match
-// is running (it leaks the winner's true valuation and would undermine
-// Vickrey's truth-telling if competing bots could see it). The
-// `visibleAuctionTopBids` view exposes these to spectators only, bounded
-// to Running matches. On match end, rows here are moved to
-// `auctionTopBidArchive` (public) so spectators can replay finished
-// matches without any view-body cost.
+// Private mirror of each auction's winning bid, used by the spectator-only
+// `visibleAuctionTopBids` view and archived after match end. Individual
+// submitted bids are separately revealed through auctionBidHistory only
+// after their auction closes.
 export const auctionTopBid = table(
   {
     indexes: [
@@ -722,6 +743,7 @@ const spacetimedb = schema({
   holding,
   auction,
   pendingBid,
+  auctionBidHistory,
   auctionResult,
   auctionTopBid,
   auctionTopBidArchive,

@@ -69,7 +69,70 @@ let myIdentity: Identity | null = null;
 let myBotId: bigint | null = null;
 const bidsByAuction = new Set<string>();
 const lastWordAttemptByMatch = new Map<string, number>();
+const previousBidsByOpponent = new Map<
+  string,
+  { auctionId: bigint; amount: number }[]
+>();
+const seenBidHistoryByMatch = new Map<string, Set<string>>();
 const WORD_RETRY_MS = 500;
+const OPPONENT_BID_HISTORY_LIMIT = 8;
+
+function recordOpponentBid(row: {
+  auctionId: bigint;
+  matchId: bigint;
+  bidderBotId: bigint;
+  letter: string;
+  amount: bigint;
+}) {
+  const matchKey = String(row.matchId);
+  const seen = seenBidHistoryByMatch.get(matchKey) ?? new Set<string>();
+  const bidId = `${row.auctionId}:${row.bidderBotId}`;
+  if (seen.has(bidId)) return;
+  seen.add(bidId);
+  seenBidHistoryByMatch.set(matchKey, seen);
+
+  const key = `${row.matchId}:${row.bidderBotId}:${row.letter.toUpperCase()}`;
+  const bids = previousBidsByOpponent.get(key) ?? [];
+  bids.push({ auctionId: row.auctionId, amount: Number(row.amount) });
+  bids.sort((a, b) => (a.auctionId < b.auctionId ? -1 : 1));
+  if (bids.length > OPPONENT_BID_HISTORY_LIMIT) {
+    bids.splice(0, bids.length - OPPONENT_BID_HISTORY_LIMIT);
+  }
+  previousBidsByOpponent.set(key, bids);
+}
+
+function opponentBidsFor(
+  conn: DbConnection,
+  matchId: bigint,
+  letter: string,
+  myScore: number,
+): { score: number; bids: number[] }[] {
+  for (const bid of conn.db.auctionBidHistory.bidHistoryByMatch.filter(matchId)) {
+    recordOpponentBid(bid);
+  }
+  const opponents: { score: number; bids: number[] }[] = [];
+  for (const participant of conn.db.matchParticipant.iter()) {
+    if (participant.matchId !== matchId || participant.botId === myBotId) {
+      continue;
+    }
+    const score = Number(participant.score);
+    if (score * 10 < myScore * 9) continue;
+    const key = `${matchId}:${participant.botId}:${letter.toUpperCase()}`;
+    opponents.push({
+      score,
+      bids: (previousBidsByOpponent.get(key) ?? []).map((bid) => bid.amount),
+    });
+  }
+  return opponents;
+}
+
+function clearOpponentBids(matchId: bigint) {
+  const prefix = `${matchId}:`;
+  for (const key of previousBidsByOpponent.keys()) {
+    if (key.startsWith(prefix)) previousBidsByOpponent.delete(key);
+  }
+  seenBidHistoryByMatch.delete(String(matchId));
+}
 
 function resolveMyBotId(conn: DbConnection): bigint | null {
   if (!myIdentity) return null;
@@ -124,10 +187,16 @@ function tryBid(
   if (bidsByAuction.has(key)) return;
   const participant = participantForMatch(conn, matchId);
   if (!participant) return;
+  const match = conn.db.matchState.id.find(matchId);
+  if (!match) return;
   const amount = decideBid({
     letter,
     myBalance: participant.balance,
+    myScore: participant.score,
     myRack: rackForMatch(conn, matchId),
+    dictionary: DICTIONARY,
+    isVickrey: match.auctionType.tag === "Vickrey",
+    opponents: opponentBidsFor(conn, matchId, letter, participant.score),
   });
   if (amount <= 0) return;
   conn.reducers
@@ -154,9 +223,14 @@ function tryPlayWord(conn: DbConnection) {
     const key = String(matchId);
     if (now - (lastWordAttemptByMatch.get(key) ?? 0) < WORD_RETRY_MS) continue;
     lastWordAttemptByMatch.set(key, now);
+    const matchState = conn.db.matchState.id.find(matchId);
+    const participant = participantForMatch(conn, matchId);
+    if (!matchState || !participant) continue;
     const word = chooseWord({
       myRack: rackForMatch(conn, matchId),
       dictionary: DICTIONARY,
+      myBalance: participant.balance,
+      bagRemaining: matchState.bagTotal,
     });
     if (!word) continue;
     console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
@@ -234,6 +308,9 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
       `[${BOT_NAME}] match ${r.matchId} auction ${r.auctionId} '${r.letter}' → bot ${winner} paid ${r.paid}`,
     );
   });
+  conn.db.auctionBidHistory.onInsert((_ctx, bid) => {
+    recordOpponentBid(bid);
+  });
 
   // When a match this bot was in ends, hop back into the lobby.
   conn.db.matchState.onUpdate((_ctx, old, neu) => {
@@ -243,6 +320,7 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
         (p) => p.matchId === neu.id && p.botId === myBotId,
       );
       if (wasIn) {
+        clearOpponentBids(neu.id);
         console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
         joinLobby(conn);
       }
@@ -281,6 +359,9 @@ function bootstrapActivity(conn: DbConnection) {
       .catch(logFailure(`registering for tournament ${TOURNAMENT_ID}`));
   }
   joinLobby(conn);
+  for (const bid of conn.db.auctionBidHistory.iter()) {
+    recordOpponentBid(bid);
+  }
   for (const a of conn.db.auction.iter()) {
     if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
   }

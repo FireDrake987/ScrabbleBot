@@ -136,10 +136,7 @@ test("finished matches drop out of the live top bids", () => {
   expect(bids[0]!.matchId).toBe(live);
 });
 
-// TODO.md: AuctionResult is public, and its `paid` exposes the runner-up's bid
-// under Vickrey. That's by design; this pins down that `topBid` itself is
-// not in the public result table.
-test("auction results do not reveal the top bid", () => {
+test("auction result omits top bid while closed bid history reveals submissions", () => {
   const db = newDb();
   const ann = teamWithBot(db, "alice", "Ann");
   const ben = teamWithBot(db, "bob", "Ben");
@@ -152,4 +149,14 @@ test("auction results do not reveal the top bid", () => {
   const r = db.db.auctionResult.auctionId.find(a)!;
   expect(r.paid).toBe(3n);
   expect(db.db.auctionTopBid.auctionId.find(a)!.topBid).toBe(40n);
+  expect(
+    [...db.db.auctionBidHistory.bidHistoryByMatch.filter(m)].map(
+      (bid) => [bid.bidderBotId, bid.amount],
+    ),
+  ).toEqual(
+    expect.arrayContaining([
+      [ann, 40n],
+      [ben, 3n],
+    ]),
+  );
 });

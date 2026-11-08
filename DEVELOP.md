@@ -95,9 +95,12 @@ Each match has its own row in `Match`. State is fully per-match:
   auction at a time per match. The next auction is scheduled by
   `auction_tick`.
 - `PendingBid { auction_id, bidder_bot_id, amount }` — **private** table.
-  Bots can't subscribe, so sealed bids stay sealed.
-- `AuctionResult { auction_id, winner_bot_id, top_bid, paid }` — public
-  history.
+  Bots can't subscribe, so bids stay sealed until the auction closes.
+- `AuctionBidHistory { auction_id, match_id, bidder_bot_id, letter, amount }`
+  — public after close, allowing bots to adapt to opponents. Rows are removed
+  when the match ends.
+- `AuctionResult { auction_id, winner_bot_id, paid }` — public outcome
+  history; the top bid remains in a separate spectator-only table.
 - `Holding { match_id, bot_id, letter, count }` — **private** table. The
   `my_rack` view exposes only the calling identity's holdings, filtered
   via `BotCredential` → `bot_id`.

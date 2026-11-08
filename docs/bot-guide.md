@@ -23,8 +23,10 @@ real entrants or the timer expires and idle simulated bots fill empty slots.
 - `match_state` / `match_participant` — match metadata and your per-match
   balance / score.
 - `auction` — open auctions across matches you're in.
-- `auction_result` — every completed auction (letter, winner_bot_id, top_bid,
-  paid).
+- `auction_result` — every completed auction (letter, winner_bot_id, paid).
+- `auction_bid_history` — each submitted bidder and amount, published only
+  after that auction closes and removed when the match ends. Bids remain sealed
+  while the auction is open.
 - `word_play` — every word played (letters used).
 - `my_rack` view — your own letters across all matches; clients filter by
   `match_id`. Opponents' racks and remaining bag composition stay hidden, though

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { test } from "node:test";
-import { chooseWord } from "./strategy.js";
+import { chooseWord, decideBid } from "./strategy.js";
 
 const rack = (letters: string) => {
   const r = new Map<string, number>();
@@ -16,6 +16,88 @@ test("chooseWord picks the longest word the rack can spell", () => {
   assert.equal(chooseWord({ myRack: rack("TACT"), dictionary }), "TACT");
   assert.equal(chooseWord({ myRack: rack("CATX"), dictionary }), "CAT");
   assert.equal(chooseWord({ myRack: rack("CX"), dictionary }), null);
+});
+
+test("decideBid values letters that advance playable dictionary words", () => {
+  const myRack = rack("AT");
+  const dictionary = ["CAT", "AT", "DOG"];
+
+  const context = {
+    myScore: 10,
+    isVickrey: true,
+    opponents: [],
+    myRack,
+    dictionary,
+  };
+  assert.ok(decideBid({ ...context, letter: "C", myBalance: 100 }) > 0);
+  assert.equal(decideBid({ ...context, letter: "Z", myBalance: 100 }), 0);
+  assert.equal(decideBid({ ...context, letter: "C", myBalance: 1 }), 1);
+});
+
+test("decideBid targets 80% of a competitive opponent's bid within tile value", () => {
+  const context = {
+    letter: "Q",
+    myBalance: 100,
+    myScore: 10,
+    isVickrey: true,
+    myRack: rack("UIZ"),
+    dictionary: ["QUIZ"],
+  };
+  const normalBid = decideBid({ ...context, opponents: [] });
+  const trailingOpponentBid = decideBid({
+    ...context,
+    opponents: [{ score: 8, bids: [12] }],
+  });
+  const competitiveOpponentBid = decideBid({
+    ...context,
+    opponents: [{ score: 9, bids: [20] }],
+  });
+
+  assert.equal(trailingOpponentBid, normalBid);
+  assert.equal(competitiveOpponentBid, 16);
+  assert.equal(
+    decideBid({
+      ...context,
+      myBalance: 10,
+      opponents: [{ score: 10, bids: [20] }],
+    }),
+    3,
+  );
+  assert.equal(
+    decideBid({
+      ...context,
+      isVickrey: false,
+      opponents: [{ score: 10, bids: [12] }],
+    }),
+    normalBid,
+  );
+
+  const lowValueContext = {
+    ...context,
+    letter: "C",
+    myRack: rack("AT"),
+    dictionary: ["CAT"],
+  };
+  assert.equal(
+    decideBid({ ...lowValueContext, opponents: [{ score: 10, bids: [40] }] }),
+    decideBid({ ...lowValueContext, opponents: [] }),
+  );
+});
+
+test("chooseWord holds tiles for a strong word unless funds or bag are low", () => {
+  const dictionary = ["CAT", "AT"];
+  const myRack = rack("CAT");
+
+  assert.equal(chooseWord({ myRack, dictionary, myBalance: 100 }), null);
+  assert.equal(chooseWord({ myRack, dictionary, myBalance: 10 }), "CAT");
+  assert.equal(
+    chooseWord({ myRack, dictionary, myBalance: 100, bagRemaining: 0 }),
+    "CAT",
+  );
+  assert.equal(
+    chooseWord({ myRack: rack("QUIZZES"), dictionary: ["QUIZZES"], myBalance: 100 }),
+    "QUIZZES",
+  );
 });
 
 // The bot can't see a match move on while it searches, so a slow search
