@@ -15,6 +15,8 @@ interface WordInfo {
 const indexedWords = new WeakMap<string[], Map<string, WordInfo[]>>();
 const FIRST_PRICE_MAX_BALANCE_BID_FRACTION = 0.35;
 const VICKREY_MAX_BALANCE_BID_FRACTION = 0.8;
+const MAX_VICKREY_BUDGET_FRACTION = 2;
+const EXPECTED_MATCH_SIZE = 6;
 const MIN_USEFUL_VICKREY_BID = 4;
 const FIRST_PRICE_VALUE_FRACTION = 0.65;
 const DEFENSE_OBSERVED_PAYMENT_FRACTION = 0.8;
@@ -31,6 +33,10 @@ export interface BidContext {
   dictionary: string[];
   isVickrey: boolean;
   opponents: { score: number; winningPayments: number[] }[];
+  bagRemaining?: number;
+  playersInMatch?: number;
+  recentWinRate?: number;
+  recentBidCount?: number;
 }
 
 export interface WordContext {
@@ -119,14 +125,39 @@ export function decideBid(ctx: BidContext): number {
     ctx.isVickrey && bestLetterValue > 0
       ? Math.max(MIN_USEFUL_VICKREY_BID, rawBid)
       : rawBid;
+  const recentBidCount = Math.max(0, ctx.recentBidCount ?? 0);
+  const confidence = Math.min(1, recentBidCount / 4);
+  const recentWinRate = Math.max(0, Math.min(1, ctx.recentWinRate ?? 0.4));
+  const aggression = Math.max(
+    0.7,
+    Math.min(1.5, 1 + (0.4 - recentWinRate) * confidence),
+  );
+  const adjustedWillingnessToPay = Math.floor(willingnessToPay * aggression);
   const balanceBidFraction = ctx.isVickrey
     ? VICKREY_MAX_BALANCE_BID_FRACTION
     : FIRST_PRICE_MAX_BALANCE_BID_FRACTION;
-  const balanceLimit = Math.max(
-    1,
-    Math.floor(balance * balanceBidFraction),
-  );
-  const strategicBid = Math.min(willingnessToPay, balanceLimit);
+  let balanceLimit = Math.floor(balance * balanceBidFraction);
+  if (
+    ctx.isVickrey &&
+    ctx.bagRemaining !== undefined &&
+    ctx.playersInMatch !== undefined
+  ) {
+    const expectedWinsRemaining = Math.max(
+      1,
+      Math.ceil(
+        Math.max(0, ctx.bagRemaining) /
+          Math.max(1, ctx.playersInMatch || EXPECTED_MATCH_SIZE),
+      ),
+    );
+    const sustainableBidLimit = Math.ceil(
+      (balance / expectedWinsRemaining) *
+        MAX_VICKREY_BUDGET_FRACTION *
+        aggression,
+    );
+    balanceLimit = Math.min(balanceLimit, sustainableBidLimit);
+  }
+  balanceLimit = Math.max(1, balanceLimit);
+  const strategicBid = Math.min(adjustedWillingnessToPay, balanceLimit);
   if (!ctx.isVickrey) {
     return Math.min(balance, strategicBid);
   }
@@ -147,7 +178,9 @@ export function decideBid(ctx: BidContext): number {
   );
   const defensiveBid = Math.min(
     defenseCap,
-    Math.floor(rivalObservedPayment * DEFENSE_OBSERVED_PAYMENT_FRACTION),
+    Math.floor(
+      rivalObservedPayment * DEFENSE_OBSERVED_PAYMENT_FRACTION * aggression,
+    ),
   );
   return Math.min(balance, Math.max(strategicBid, defensiveBid));
 }

@@ -68,6 +68,7 @@ DICTIONARY.sort((a, b) => b.length - a.length); // longest first for greedy pick
 let myIdentity: Identity | null = null;
 let myBotId: bigint | null = null;
 const bidsByAuction = new Set<string>();
+const recentBidOutcomesByMatch = new Map<string, boolean[]>();
 const lastWordAttemptByMatch = new Map<string, number>();
 const matchStateSubscriptions = new Map<bigint, { unsubscribe(): void }>();
 const matchDataSubscriptions = new Map<bigint, { unsubscribe(): void }>();
@@ -127,6 +128,10 @@ function maybeJoinLobby(conn: DbConnection) {
 function stopTrackingMatch(matchId: bigint) {
   pendingMatchStateChecks.delete(matchId);
   runningMatchIds.delete(matchId);
+  recentBidOutcomesByMatch.delete(String(matchId));
+  for (const key of bidsByAuction) {
+    if (key.startsWith(`${matchId}:`)) bidsByAuction.delete(key);
+  }
   matchStateSubscriptions.get(matchId)?.unsubscribe();
   matchDataSubscriptions.get(matchId)?.unsubscribe();
   matchStateSubscriptions.delete(matchId);
@@ -149,6 +154,9 @@ function subscribeToMatchData(conn: DbConnection, matchId: bigint) {
     .subscribe((tables) => [
       tables.auction.where((auction) => auction.matchId.eq(matchId)),
       tables.auctionResult.where((result) => result.matchId.eq(matchId)),
+      tables.matchParticipant.where((participant) =>
+        participant.matchId.eq(matchId),
+      ),
       tables.myRack.where((holding) => holding.matchId.eq(matchId)),
     ]);
   matchDataSubscriptions.set(matchId, handle);
@@ -294,6 +302,14 @@ function tryBid(
   }
   const participant = participantForMatch(conn, matchId);
   if (!participant) return;
+  const recentOutcomes = recentBidOutcomesByMatch.get(String(matchId)) ?? [];
+  const recentWinRate =
+    recentOutcomes.length > 0
+      ? recentOutcomes.filter((won) => won).length / recentOutcomes.length
+      : undefined;
+  const playersInMatch = [...conn.db.matchParticipant.iter()].filter(
+    (row) => row.matchId === matchId,
+  ).length;
   const amount = decideBid({
     letter,
     myBalance: participant.balance,
@@ -301,6 +317,10 @@ function tryBid(
     myRack: rackForMatch(conn, matchId),
     dictionary: DICTIONARY,
     isVickrey: match.auctionType.tag === "Vickrey",
+    bagRemaining: Number(match.bagTotal),
+    playersInMatch,
+    recentWinRate,
+    recentBidCount: recentOutcomes.length,
     opponents: opponentPaymentHistoryFor(
       conn,
       matchId,
@@ -312,6 +332,7 @@ function tryBid(
   conn.reducers
     .submitBid({ auctionId, amount: BigInt(amount) })
     .catch((err: unknown) => {
+      bidsByAuction.delete(key);
       const message = err instanceof Error ? err.message : String(err);
       if (!/auction closed/i.test(message)) {
         logFailure(`bid on auction ${auctionId}`)(err);
@@ -365,6 +386,14 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   });
   conn.db.auctionResult.onInsert((_ctx, result) => {
     if (myBotId === null) return;
+    const bidKey = `${result.matchId}:${result.auctionId}`;
+    if (bidsByAuction.delete(bidKey)) {
+      const matchKey = String(result.matchId);
+      const outcomes = recentBidOutcomesByMatch.get(matchKey) ?? [];
+      outcomes.push(result.winnerBotId === myBotId);
+      if (outcomes.length > 8) outcomes.shift();
+      recentBidOutcomesByMatch.set(matchKey, outcomes);
+    }
     const winner =
       result.winnerBotId !== undefined && result.winnerBotId !== null
         ? String(result.winnerBotId)

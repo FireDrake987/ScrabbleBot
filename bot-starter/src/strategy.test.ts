@@ -114,6 +114,38 @@ test("Vickrey bids approach tile value and respect the larger balance cap", () =
   );
 });
 
+test("Vickrey bids adapt to recent outcomes and remaining auctions", () => {
+  const context = {
+    letter: "Q",
+    myBalance: 100,
+    myScore: 10,
+    isVickrey: true,
+    myRack: rack("UIZ"),
+    dictionary: ["QUIZ"],
+    opponents: [],
+    bagRemaining: 84,
+    playersInMatch: 6,
+  };
+
+  const earlyBudgetBid = decideBid(context);
+  const losingStreakBid = decideBid({
+    ...context,
+    recentWinRate: 0,
+    recentBidCount: 4,
+  });
+  const winningStreakBid = decideBid({
+    ...context,
+    recentWinRate: 1,
+    recentBidCount: 4,
+  });
+  const lateMatchBid = decideBid({ ...context, bagRemaining: 6 });
+
+  assert.equal(earlyBudgetBid, 15);
+  assert.equal(losingStreakBid, 20);
+  assert.equal(winningStreakBid, 10);
+  assert.equal(lateMatchBid, 33);
+});
+
 test("chooseWord holds tiles for a strong word unless funds or bag are low", () => {
   const dictionary = ["CAT", "AT"];
   const myRack = rack("CAT");
