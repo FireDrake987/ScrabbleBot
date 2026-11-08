@@ -13,8 +13,10 @@ interface WordInfo {
 }
 
 const indexedWords = new WeakMap<string[], Map<string, WordInfo[]>>();
-const MAX_BALANCE_BID_FRACTION = 0.35;
-const DEFENSE_EXPECTED_BID_FRACTION = 0.8;
+const FIRST_PRICE_MAX_BALANCE_BID_FRACTION = 0.35;
+const VICKREY_MAX_BALANCE_BID_FRACTION = 0.6;
+const FIRST_PRICE_VALUE_FRACTION = 0.65;
+const DEFENSE_OBSERVED_PAYMENT_FRACTION = 0.8;
 const DEFENSE_VALUE_FRACTION = 0.8;
 const WORD_VALUE_FRACTION_TO_PLAY = 0.35;
 const MIN_BALANCE_TO_HOLD = 18;
@@ -27,7 +29,7 @@ export interface BidContext {
   myRack: Map<string, number>;
   dictionary: string[];
   isVickrey: boolean;
-  opponents: { score: number; bids: number[] }[];
+  opponents: { score: number; winningPayments: number[] }[];
 }
 
 export interface WordContext {
@@ -115,35 +117,41 @@ export function decideBid(ctx: BidContext): number {
     bestMarginalValue = Math.max(bestMarginalValue, marginalValue);
   }
 
-  const willingnessToPay = Math.floor(bestMarginalValue * 0.65);
+  const willingnessToPay = Math.floor(
+    bestMarginalValue *
+      (ctx.isVickrey ? 1 : FIRST_PRICE_VALUE_FRACTION),
+  );
+  const balanceBidFraction = ctx.isVickrey
+    ? VICKREY_MAX_BALANCE_BID_FRACTION
+    : FIRST_PRICE_MAX_BALANCE_BID_FRACTION;
   const balanceLimit = Math.max(
     1,
-    Math.floor(balance * MAX_BALANCE_BID_FRACTION),
+    Math.floor(balance * balanceBidFraction),
   );
   const strategicBid = Math.min(willingnessToPay, balanceLimit);
   if (!ctx.isVickrey) {
     return Math.min(balance, strategicBid);
   }
 
-  let rivalLikelyBid = 0;
+  let rivalObservedPayment = 0;
   for (const opponent of ctx.opponents) {
     if (opponent.score * 10 < ctx.myScore * 9) continue;
-    const previousBids = opponent.bids
-      .filter((bid) => bid > 0)
+    const payments = opponent.winningPayments
+      .filter((payment) => payment > 0)
       .sort((a, b) => a - b);
-    if (previousBids.length === 0) continue;
-    const median = previousBids[Math.floor((previousBids.length - 1) / 2)]!;
-    rivalLikelyBid = Math.max(rivalLikelyBid, median);
+    if (payments.length === 0) continue;
+    const median = payments[Math.floor((payments.length - 1) / 2)]!;
+    rivalObservedPayment = Math.max(rivalObservedPayment, median);
   }
   const defenseCap = Math.min(
     Math.floor(bestMarginalValue * DEFENSE_VALUE_FRACTION),
     balanceLimit,
   );
-  const runnerUpBid = Math.min(
+  const defensiveBid = Math.min(
     defenseCap,
-    Math.floor(rivalLikelyBid * DEFENSE_EXPECTED_BID_FRACTION),
+    Math.floor(rivalObservedPayment * DEFENSE_OBSERVED_PAYMENT_FRACTION),
   );
-  return Math.min(balance, Math.max(strategicBid, runnerUpBid));
+  return Math.min(balance, Math.max(strategicBid, defensiveBid));
 }
 
 export function chooseWord(ctx: WordContext): string | null {

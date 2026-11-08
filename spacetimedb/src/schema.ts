@@ -435,30 +435,6 @@ export const pendingBid = table(
 );
 export type PendingBid = Infer<typeof pendingBid.rowType>;
 
-// Public only after an auction closes. Bots can use completed bid history to
-// adapt their strategy without exposing active sealed bids.
-export const auctionBidHistory = table(
-  {
-    public: true,
-    indexes: [
-      {
-        accessor: "bidHistoryByMatch",
-        algorithm: "btree",
-        columns: ["matchId"],
-      },
-    ],
-  },
-  t.row("AuctionBidHistory", {
-    id: t.u64().primaryKey().autoInc(),
-    auctionId: t.u64(),
-    matchId: t.u64(),
-    bidderBotId: t.u64(),
-    letter: t.string(),
-    amount: t.i64(),
-  }),
-);
-export type AuctionBidHistory = Infer<typeof auctionBidHistory.rowType>;
-
 export const auctionResult = table(
   {
     public: true,
@@ -483,8 +459,7 @@ export type AuctionResult = Infer<typeof auctionResult.rowType>;
 
 // Private mirror of each auction's winning bid, used by the spectator-only
 // `visibleAuctionTopBids` view and archived after match end. Individual
-// submitted bids are separately revealed through auctionBidHistory only
-// after their auction closes.
+// submitted bids are never exposed during a match.
 export const auctionTopBid = table(
   {
     indexes: [
@@ -743,7 +718,6 @@ const spacetimedb = schema({
   holding,
   auction,
   pendingBid,
-  auctionBidHistory,
   auctionResult,
   auctionTopBid,
   auctionTopBidArchive,

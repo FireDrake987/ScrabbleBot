@@ -203,24 +203,10 @@ test("vickrey winner pays the second highest bid", () => {
   bid(db, "Ann", auction.id, 4n);
   bid(db, "Ben", auction.id, 9n);
   bid(db, "Cat", auction.id, 6n);
-  expect([...db.db.auctionBidHistory.bidHistoryByMatch.filter(m)]).toEqual([]);
   tick(db, m);
 
   const r = resultOf(db, auction.id);
   expect([r.winnerBotId, r.paid]).toEqual([ben, 6n]);
-  const history = new Map(
-    [...db.db.auctionBidHistory.bidHistoryByMatch.filter(m)].map((bid) => [
-      bid.bidderBotId,
-      [bid.letter, bid.amount],
-    ]),
-  );
-  expect(history).toEqual(
-    new Map([
-      [ann, [auction.letter, 4n]],
-      [ben, [auction.letter, 9n]],
-      [cat, [auction.letter, 6n]],
-    ]),
-  );
   expect(participant(db, m, ben).balance).toBe(STARTING_BALANCE - 6n);
   expect(participant(db, m, ann).balance).toBe(STARTING_BALANCE);
   expect(holds(db, m, ben, auction.letter)).toBe(had + 1);
@@ -379,7 +365,6 @@ test("a match ends when the bag is empty", () => {
   expect(state.endedAt).toEqual(db.clock.now());
   expect(state.currentAuctionId).toBeUndefined();
   expect(state.bagTotal).toBe(0);
-  expect([...db.db.auctionBidHistory.bidHistoryByMatch.filter(m)]).toEqual([]);
   expect(
     [...db.db.auction.auctionByMatch.filter(m)].every(
       (a) => a.status.tag === "Closed",

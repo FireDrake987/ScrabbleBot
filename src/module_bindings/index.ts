@@ -67,7 +67,6 @@ import UnregisterFromTournamentReducer from "./unregister_from_tournament_reduce
 // Import all table schema definitions
 import AdminRow from "./admin_table";
 import AuctionRow from "./auction_table";
-import AuctionBidHistoryRow from "./auction_bid_history_table";
 import AuctionResultRow from "./auction_result_table";
 import AuctionTopBidArchiveRow from "./auction_top_bid_archive_table";
 import BotRow from "./bot_table";
@@ -129,20 +128,6 @@ const tablesSchema = __schema({
       { name: 'auction_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AuctionRow),
-  auctionBidHistory: __table({
-    name: 'auction_bid_history',
-    indexes: [
-      { accessor: 'id', name: 'auction_bid_history_id_idx_btree', algorithm: 'btree', columns: [
-        'id',
-      ] },
-      { accessor: 'bidHistoryByMatch', name: 'auction_bid_history_match_id_idx_btree', algorithm: 'btree', columns: [
-        'matchId',
-      ] },
-    ],
-    constraints: [
-      { name: 'auction_bid_history_id_key', constraint: 'unique', columns: ['id'] },
-    ],
-  }, AuctionBidHistoryRow),
   auctionResult: __table({
     name: 'auction_result',
     indexes: [

@@ -24,9 +24,10 @@ real entrants or the timer expires and idle simulated bots fill empty slots.
   balance / score.
 - `auction` — open auctions across matches you're in.
 - `auction_result` — every completed auction (letter, winner_bot_id, paid).
-- `auction_bid_history` — each submitted bidder and amount, published only
-  after that auction closes and removed when the match ends. Bids remain sealed
-  while the auction is open.
+  Individual bids remain private; in a Vickrey auction, `paid` is the
+  runner-up's bid, not the winner's bid.
+  The starter bot uses competitive opponents' past payments on that letter as
+  a rough defensive-bid signal; it cannot recover their exact bids.
 - `word_play` — every word played (letters used).
 - `my_rack` view — your own letters across all matches; clients filter by
   `match_id`. Opponents' racks and remaining bag composition stay hidden, though
@@ -104,7 +105,17 @@ DbConnection.builder()
         //    the 60s timer expires.
         conn.reducers.joinLobby({});
       })
-      .subscribeToAllTables();
+      .subscribe([
+        "SELECT * FROM bot",
+        "SELECT * FROM bot_credential",
+        "SELECT * FROM auction WHERE status = 'Open'",
+        "SELECT * FROM auction_result",
+        "SELECT * FROM lobby",
+        "SELECT * FROM lobby_member",
+        "SELECT * FROM match_participant",
+        "SELECT * FROM match_state",
+        "SELECT * FROM my_rack",
+      ]);
 
     // 3. When a new auction opens, decide your bid.
     conn.db.auction.onInsert((_ctx, a) => {

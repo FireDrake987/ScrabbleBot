@@ -69,69 +69,37 @@ let myIdentity: Identity | null = null;
 let myBotId: bigint | null = null;
 const bidsByAuction = new Set<string>();
 const lastWordAttemptByMatch = new Map<string, number>();
-const previousBidsByOpponent = new Map<
-  string,
-  { auctionId: bigint; amount: number }[]
->();
-const seenBidHistoryByMatch = new Map<string, Set<string>>();
 const WORD_RETRY_MS = 500;
-const OPPONENT_BID_HISTORY_LIMIT = 8;
 
-function recordOpponentBid(row: {
-  auctionId: bigint;
-  matchId: bigint;
-  bidderBotId: bigint;
-  letter: string;
-  amount: bigint;
-}) {
-  const matchKey = String(row.matchId);
-  const seen = seenBidHistoryByMatch.get(matchKey) ?? new Set<string>();
-  const bidId = `${row.auctionId}:${row.bidderBotId}`;
-  if (seen.has(bidId)) return;
-  seen.add(bidId);
-  seenBidHistoryByMatch.set(matchKey, seen);
-
-  const key = `${row.matchId}:${row.bidderBotId}:${row.letter.toUpperCase()}`;
-  const bids = previousBidsByOpponent.get(key) ?? [];
-  bids.push({ auctionId: row.auctionId, amount: Number(row.amount) });
-  bids.sort((a, b) => (a.auctionId < b.auctionId ? -1 : 1));
-  if (bids.length > OPPONENT_BID_HISTORY_LIMIT) {
-    bids.splice(0, bids.length - OPPONENT_BID_HISTORY_LIMIT);
-  }
-  previousBidsByOpponent.set(key, bids);
-}
-
-function opponentBidsFor(
+function opponentPaymentHistoryFor(
   conn: DbConnection,
   matchId: bigint,
   letter: string,
   myScore: number,
-): { score: number; bids: number[] }[] {
-  for (const bid of conn.db.auctionBidHistory.bidHistoryByMatch.filter(matchId)) {
-    recordOpponentBid(bid);
-  }
-  const opponents: { score: number; bids: number[] }[] = [];
+): { score: number; winningPayments: number[] }[] {
+  const letterKey = letter.toUpperCase();
+  const results = [...conn.db.auctionResult.resultByMatch.filter(matchId)];
+  const opponents: { score: number; winningPayments: number[] }[] = [];
   for (const participant of conn.db.matchParticipant.iter()) {
     if (participant.matchId !== matchId || participant.botId === myBotId) {
       continue;
     }
     const score = Number(participant.score);
     if (score * 10 < myScore * 9) continue;
-    const key = `${matchId}:${participant.botId}:${letter.toUpperCase()}`;
     opponents.push({
       score,
-      bids: (previousBidsByOpponent.get(key) ?? []).map((bid) => bid.amount),
+      winningPayments: results
+        .filter(
+          (result) =>
+            result.letter.toUpperCase() === letterKey &&
+            result.winnerBotId === participant.botId,
+        )
+        .sort((a, b) => (a.auctionId < b.auctionId ? -1 : 1))
+        .slice(-8)
+        .map((result) => Number(result.paid)),
     });
   }
   return opponents;
-}
-
-function clearOpponentBids(matchId: bigint) {
-  const prefix = `${matchId}:`;
-  for (const key of previousBidsByOpponent.keys()) {
-    if (key.startsWith(prefix)) previousBidsByOpponent.delete(key);
-  }
-  seenBidHistoryByMatch.delete(String(matchId));
 }
 
 function resolveMyBotId(conn: DbConnection): bigint | null {
@@ -185,10 +153,20 @@ function tryBid(
   if (myBotId === null) return;
   const key = `${matchId}:${auctionId}`;
   if (bidsByAuction.has(key)) return;
+  const match = conn.db.matchState.id.find(matchId);
+  const auction = conn.db.auction.id.find(auctionId);
+  if (
+    !match ||
+    match.status.tag !== "Running" ||
+    match.currentAuctionId !== auctionId ||
+    !auction ||
+    auction.matchId !== matchId ||
+    auction.status.tag !== "Open"
+  ) {
+    return;
+  }
   const participant = participantForMatch(conn, matchId);
   if (!participant) return;
-  const match = conn.db.matchState.id.find(matchId);
-  if (!match) return;
   const amount = decideBid({
     letter,
     myBalance: participant.balance,
@@ -196,12 +174,22 @@ function tryBid(
     myRack: rackForMatch(conn, matchId),
     dictionary: DICTIONARY,
     isVickrey: match.auctionType.tag === "Vickrey",
-    opponents: opponentBidsFor(conn, matchId, letter, participant.score),
+    opponents: opponentPaymentHistoryFor(
+      conn,
+      matchId,
+      letter,
+      participant.score,
+    ),
   });
   if (amount <= 0) return;
   conn.reducers
     .submitBid({ auctionId, amount: BigInt(amount) })
-    .catch(logFailure(`bid on auction ${auctionId}`));
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/auction closed/i.test(message)) {
+        logFailure(`bid on auction ${auctionId}`)(err);
+      }
+    });
   bidsByAuction.add(key);
   console.log(
     `[${BOT_NAME}] bid ${amount} on '${letter}' (match ${matchId}, auction ${auctionId})`,
@@ -247,6 +235,11 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
 
   conn
     .subscriptionBuilder()
+    .onError((ctx) =>
+      console.error(
+        `[${BOT_NAME}] subscription failed: ${ctx.event?.message ?? "unknown subscription error"}`,
+      ),
+    )
     .onApplied(() => {
       console.log(`[${BOT_NAME}] subscription applied`);
 
@@ -288,7 +281,17 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
       );
       bootstrapActivity(conn);
     })
-    .subscribeToAllTables();
+    .subscribe([
+      "SELECT * FROM bot",
+      "SELECT * FROM bot_credential",
+      "SELECT * FROM auction WHERE status = 'Open'",
+      "SELECT * FROM auction_result",
+      "SELECT * FROM lobby",
+      "SELECT * FROM lobby_member",
+      "SELECT * FROM match_participant",
+      "SELECT * FROM match_state",
+      "SELECT * FROM my_rack",
+    ]);
 
   conn.db.auction.onInsert((_ctx: EventContext, a) => {
     if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
@@ -308,19 +311,22 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
       `[${BOT_NAME}] match ${r.matchId} auction ${r.auctionId} '${r.letter}' → bot ${winner} paid ${r.paid}`,
     );
   });
-  conn.db.auctionBidHistory.onInsert((_ctx, bid) => {
-    recordOpponentBid(bid);
-  });
-
   // When a match this bot was in ends, hop back into the lobby.
   conn.db.matchState.onUpdate((_ctx, old, neu) => {
     if (myBotId === null) return;
+    if (
+      neu.status.tag === "Running" &&
+      neu.currentAuctionId !== undefined &&
+      neu.currentAuctionId !== old.currentAuctionId
+    ) {
+      const auction = conn.db.auction.id.find(neu.currentAuctionId);
+      if (auction) tryBid(conn, auction.id, neu.id, auction.letter);
+    }
     if (old.status.tag !== "Ended" && neu.status.tag === "Ended") {
       const wasIn = Array.from(conn.db.matchParticipant.iter()).some(
         (p) => p.matchId === neu.id && p.botId === myBotId,
       );
       if (wasIn) {
-        clearOpponentBids(neu.id);
         console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
         joinLobby(conn);
       }
@@ -359,9 +365,6 @@ function bootstrapActivity(conn: DbConnection) {
       .catch(logFailure(`registering for tournament ${TOURNAMENT_ID}`));
   }
   joinLobby(conn);
-  for (const bid of conn.db.auctionBidHistory.iter()) {
-    recordOpponentBid(bid);
-  }
   for (const a of conn.db.auction.iter()) {
     if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
   }

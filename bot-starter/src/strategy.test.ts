@@ -34,7 +34,7 @@ test("decideBid values letters that advance playable dictionary words", () => {
   assert.equal(decideBid({ ...context, letter: "C", myBalance: 1 }), 1);
 });
 
-test("decideBid targets 80% of a competitive opponent's bid within tile value", () => {
+test("Vickrey bids approach tile value and respect the larger balance cap", () => {
   const context = {
     letter: "Q",
     myBalance: 100,
@@ -46,30 +46,37 @@ test("decideBid targets 80% of a competitive opponent's bid within tile value", 
   const normalBid = decideBid({ ...context, opponents: [] });
   const trailingOpponentBid = decideBid({
     ...context,
-    opponents: [{ score: 8, bids: [12] }],
+    opponents: [{ score: 8, winningPayments: [50] }],
   });
   const competitiveOpponentBid = decideBid({
     ...context,
-    opponents: [{ score: 9, bids: [20] }],
+    opponents: [{ score: 9, winningPayments: [50] }],
   });
 
+  assert.equal(normalBid, 21);
   assert.equal(trailingOpponentBid, normalBid);
-  assert.equal(competitiveOpponentBid, 16);
+  assert.equal(competitiveOpponentBid, normalBid);
   assert.equal(
     decideBid({
       ...context,
       myBalance: 10,
-      opponents: [{ score: 10, bids: [20] }],
+      opponents: [{ score: 10, winningPayments: [50] }],
     }),
-    3,
+    6,
   );
+  const firstPriceBid = decideBid({
+    ...context,
+    isVickrey: false,
+    opponents: [{ score: 10, winningPayments: [12] }],
+  });
+  assert.equal(firstPriceBid, 13);
   assert.equal(
     decideBid({
       ...context,
       isVickrey: false,
-      opponents: [{ score: 10, bids: [12] }],
+      opponents: [{ score: 10, winningPayments: [12] }],
     }),
-    normalBid,
+    firstPriceBid,
   );
 
   const lowValueContext = {
@@ -79,7 +86,10 @@ test("decideBid targets 80% of a competitive opponent's bid within tile value", 
     dictionary: ["CAT"],
   };
   assert.equal(
-    decideBid({ ...lowValueContext, opponents: [{ score: 10, bids: [40] }] }),
+    decideBid({
+      ...lowValueContext,
+      opponents: [{ score: 10, winningPayments: [40] }],
+    }),
     decideBid({ ...lowValueContext, opponents: [] }),
   );
 });

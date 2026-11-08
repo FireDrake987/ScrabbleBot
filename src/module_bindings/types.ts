@@ -29,16 +29,6 @@ export const Auction = __t.object("Auction", {
 });
 export type Auction = __Infer<typeof Auction>;
 
-export const AuctionBidHistory = __t.object("AuctionBidHistory", {
-  id: __t.u64(),
-  auctionId: __t.u64(),
-  matchId: __t.u64(),
-  bidderBotId: __t.u64(),
-  letter: __t.string(),
-  amount: __t.i64(),
-});
-export type AuctionBidHistory = __Infer<typeof AuctionBidHistory>;
-
 export const AuctionResult = __t.object("AuctionResult", {
   auctionId: __t.u64(),
   matchId: __t.u64(),

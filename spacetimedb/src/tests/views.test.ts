@@ -136,7 +136,7 @@ test("finished matches drop out of the live top bids", () => {
   expect(bids[0]!.matchId).toBe(live);
 });
 
-test("auction result omits top bid while closed bid history reveals submissions", () => {
+test("auction result exposes the winner and payment, not individual bids", () => {
   const db = newDb();
   const ann = teamWithBot(db, "alice", "Ann");
   const ben = teamWithBot(db, "bob", "Ben");
@@ -147,16 +147,7 @@ test("auction result omits top bid while closed bid history reveals submissions"
   tick(db, m);
 
   const r = db.db.auctionResult.auctionId.find(a)!;
+  expect(r.winnerBotId).toBe(ann);
   expect(r.paid).toBe(3n);
   expect(db.db.auctionTopBid.auctionId.find(a)!.topBid).toBe(40n);
-  expect(
-    [...db.db.auctionBidHistory.bidHistoryByMatch.filter(m)].map(
-      (bid) => [bid.bidderBotId, bid.amount],
-    ),
-  ).toEqual(
-    expect.arrayContaining([
-      [ann, 40n],
-      [ben, 3n],
-    ]),
-  );
 });

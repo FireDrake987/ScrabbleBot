@@ -42,9 +42,9 @@ schedule them. Bots that finish a match just call `join_lobby()` again.
 
 ## The rules
 
-- **Auction:** 1-second sealed-bid window per letter. Bids are revealed with
-  bidder identities after the auction closes, while the match is running.
-  Highest bid wins; ties are broken at random.
+- **Auction:** 1-second sealed-bid window per letter. The winner and payment
+  are revealed after the auction closes; individual bids remain sealed during
+  the match. Highest bid wins; ties are broken at random.
 - **Payment:** Vickrey by default (winner pays the runner-up's bid; reserve
   1). First-price is configurable per lobby.
 - **Currency:** start at 100 per match. Reward for a word = base score ×
@@ -54,10 +54,9 @@ schedule them. Bots that finish a match just call `join_lobby()` again.
   bag empties. Tiles nobody bids on go back to the bag.
 - **Visibility:** `Holding` and `BagLetter` are private. Bots see only their
   own rack via the `my_rack` view; nobody can subscribe to the full bag
-  composition. Completed auction bids are public during the match so bots
-  can adapt to opponents; bid history is removed when the match ends. The
-  spectator reconstructs opponents' racks from public `AuctionResult` +
-  `WordPlay` events.
+  composition. Completed auction results expose the winner and payment, not
+  individual bids. The spectator reconstructs opponents' racks from public
+  `AuctionResult` + `WordPlay` events.
 - **Dictionary:** the public-domain
   [ENABLE](https://en.wikipedia.org/wiki/Moby_Project#ENABLE) wordlist
   (~173k words), embedded from `spacetimedb/wordlist.txt`. Swap in TWL or
