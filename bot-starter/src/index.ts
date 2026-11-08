@@ -284,7 +284,7 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
     .subscribe([
       "SELECT * FROM bot",
       "SELECT * FROM bot_credential",
-      "SELECT * FROM auction WHERE status = 'Open'",
+      "SELECT * FROM auction",
       "SELECT * FROM auction_result",
       "SELECT * FROM lobby",
       "SELECT * FROM lobby_member",
